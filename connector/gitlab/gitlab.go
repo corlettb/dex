@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/coreos/dex/connector"
 	"github.com/sirupsen/logrus"
@@ -18,8 +19,8 @@ import (
 
 const (
 	// https://docs.gitlab.com/ee/integration/oauth_provider.html#authorized-applications
-	scopeUser = "read_user"
-	scopeAPI  = "api"
+	scopeUser   = "read_user"
+	scopeOpenID = "openid"
 )
 
 var (
@@ -45,9 +46,12 @@ type gitlabUser struct {
 }
 
 type gitlabGroup struct {
-	ID   int
-	Name string
-	Path string
+	Sub      string
+	Name     string
+	Nickname string
+	Profile  string
+	Picture  string
+	Groups   []string
 }
 
 // Open returns a strategy for logging in through GitLab.
@@ -86,7 +90,7 @@ type gitlabConnector struct {
 func (c *gitlabConnector) oauth2Config(scopes connector.Scopes) *oauth2.Config {
 	gitlabScopes := []string{scopeUser}
 	if scopes.Groups {
-		gitlabScopes = []string{scopeAPI}
+		gitlabScopes = []string{scopeUser, scopeOpenID}
 	}
 
 	gitlabEndpoint := oauth2.Endpoint{AuthURL: c.baseURL + "/oauth/authorize", TokenURL: c.baseURL + "/oauth/token"}
@@ -238,11 +242,10 @@ func (c *gitlabConnector) user(ctx context.Context, client *http.Client) (gitlab
 // The HTTP passed client is expected to be constructed by the golang.org/x/oauth2 package,
 // which inserts a bearer token as part of the request.
 func (c *gitlabConnector) groups(ctx context.Context, client *http.Client) ([]string, error) {
-
-	apiURL := c.baseURL + "/api/v4/groups"
+	apiURL := c.baseURL + "/oauth/userinfo"
 
 	groups := []string{}
-	var gitlabGroups []gitlabGroup
+	var gitlabGroups gitlabGroup
 	for {
 		// 100 is the maximum number for per_page that allowed by gitlab
 		req, err := http.NewRequest("GET", apiURL, nil)
@@ -268,8 +271,8 @@ func (c *gitlabConnector) groups(ctx context.Context, client *http.Client) ([]st
 			return nil, fmt.Errorf("gitlab: unmarshal groups: %v", err)
 		}
 
-		for _, group := range gitlabGroups {
-			groups = append(groups, group.Name)
+		for _, group := range gitlabGroups.Groups {
+			groups = append(groups, strings.Replace(group, "/", "-", -1))
 		}
 
 		link := resp.Header.Get("Link")
